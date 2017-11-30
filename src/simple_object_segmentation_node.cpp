@@ -1,8 +1,12 @@
+// Copyright (C) 2016 by Krishneel Chaudhary @ JSK Lab,
+// The University of Tokyo, Japan
+// krishneel@jsk.imi.i.u-tokyo.ac.jp
 
 #include <simple_object_segmentation/simple_object_segmentation.hpp>
 
 SimpleObjectSegmentation::SimpleObjectSegmentation() :
-    num_threads_(2) {
+    num_threads_(2), user_point_(false) {
+    this->pnh_.param("user_point", this->user_point_, true);
     this->onInit();
 }
 
@@ -17,14 +21,28 @@ void SimpleObjectSegmentation::onInit() {
 }
 
 void SimpleObjectSegmentation::subscribe() {
-    this->sub_cloud_ = this->pnh_.subscribe(
-       "points", 1, &SimpleObjectSegmentation::callback, this);
-    
+
+    if (this->user_point_) {
+       this->sub_point_.subscribe(this->pnh_, "points", 1);
+       this->sub_rect_.subscribe(this->pnh_, "rect", 1);
+       this->sync_ = boost::make_shared<message_filters::Synchronizer<
+          SyncPolicy> >(100);
+       this->sync_->connectInput(this->sub_point_, this->sub_rect_);
+       this->sync_->registerCallback(
+          boost::bind(&SimpleObjectSegmentation::callback, this, _1, _2));
+    } else {
+       this->sub_cloud_ = this->pnh_.subscribe(
+          "points", 1, &SimpleObjectSegmentation::callback, this);
+    }
 }
 
 void SimpleObjectSegmentation::unsubscribe() {
-    this->sub_cloud_.shutdown();
-   
+    if (this->user_point_) {
+       this->sub_point_.unsubscribe();
+       this->sub_rect_.unsubscribe();
+    } else {
+       this->sub_cloud_.shutdown();
+    }
 }
 
 void SimpleObjectSegmentation::callback(
@@ -39,11 +57,49 @@ void SimpleObjectSegmentation::callback(
 
     assert((cloud->width != 1 || cloud->height != 1)  &&
            "\033[31m UNORGANIZED INPUT CLOUD \033[0m");
-
-    // PointNormal::Ptr normals(new PointNormal);
-    // this->getNormals(normals, cloud);
-
     this->segment(cloud);
+}
+
+void SimpleObjectSegmentation::callback(
+    const sensor_msgs::PointCloud2::ConstPtr &cloud_msg,
+    const geometry_msgs::PolygonStamped::ConstPtr &rect_msg) {
+    PointCloud::Ptr cloud(new PointCloud);
+    pcl::fromROSMsg(*cloud_msg, *cloud);
+    if (cloud->empty() || rect_msg->polygon.points.size() == 0) {
+       ROS_ERROR("[::cloudCB]: EMPTY INPUTS");
+       return;
+    }
+    assert((cloud->width != 1 || cloud->height != 1)  &&
+          "\033[31m UNORGANIZED INPUT CLOUD \033[0m");
+    
+    this->input_size_ = cv::Size(cloud->width, cloud->height);
+
+    int x = rect_msg->polygon.points[0].x;
+    int y = rect_msg->polygon.points[0].y;
+    int width = rect_msg->polygon.points[1].x - x;
+    int height = rect_msg->polygon.points[1].y - y;
+
+    x -= width/2;
+    y -= height/2;
+    width *= 2;
+    height *= 2;
+
+    x = x < 0 ? 0 : x;
+    y = y < 0 ? 0 : y;
+    width -= x + width > cloud->width ? (x + width) - cloud->width : 0;
+    height -= y + height > cloud->height ? (y + height) - cloud->height : 0;
+    this->rect_ = cv::Rect_<int>(x, y, width, height);
+
+    PointNormal::Ptr normals(new PointNormal);
+    this->getNormals(normals, cloud);
+
+    PointCloudNormal::Ptr src_pts(new PointCloudNormal);
+    this->fastSeedRegionGrowing(src_pts, cloud, normals);
+    
+    sensor_msgs::PointCloud2 ros_cloud;
+    pcl::toROSMsg(*src_pts, ros_cloud);
+    ros_cloud.header = cloud_msg->header;
+    this->pub_cloud_.publish(ros_cloud);
 }
 
 void SimpleObjectSegmentation::getNormals(
@@ -58,7 +114,6 @@ void SimpleObjectSegmentation::getNormals(
     ne_.setInputCloud(cloud);
     ne_.compute(*normals);
 }
-
 
 void SimpleObjectSegmentation::segment(
     const PointCloud::Ptr in_cloud) {
@@ -181,6 +236,92 @@ float SimpleObjectSegmentation::convexityCriteria(
     }
 }
 
+void SimpleObjectSegmentation::fastSeedRegionGrowing(
+    PointCloudNormal::Ptr src_points, const PointCloud::Ptr cloud,
+    const PointNormal::Ptr normals) {
+    if (cloud->empty() || normals->size() != cloud->size()) {
+       return;
+    }
+    int seed_index = (rect_.x + rect_.width/2)  +
+       (rect_.y + rect_.height/2) * input_size_.width;
+    Eigen::Vector4f seed_point = cloud->points[seed_index].getVector4fMap();
+    Eigen::Vector4f seed_normal = normals->points[
+       seed_index].getNormalVector4fMap();
+    std::vector<int> labels(static_cast<int>(cloud->size()), -1);
+    const int window_size = 3;
+    const int wsize = window_size * window_size;
+    const int lenght = std::floor(window_size/2);
+    std::vector<int> processing_list;
+    for (int j = -lenght; j <= lenght; j++) {
+       for (int i = -lenght; i <= lenght; i++) {
+          int index = (seed_index + (j * input_size_.width)) + i;
+          if (index >= 0 && index < cloud->size()) {
+             processing_list.push_back(index);
+          }
+       }
+    }
+
+    std::vector<int> temp_list;
+    while (true) {
+       if (processing_list.empty()) {
+          break;
+       }
+       temp_list.clear();
+       for (int i = 0; i < processing_list.size(); i++) {
+          int idx = processing_list[i];
+          if (labels[idx] == -1) {
+             Eigen::Vector4f c = cloud->points[idx].getVector4fMap();
+             Eigen::Vector4f n = normals->points[idx].getNormalVector4fMap();
+             if (this->seedVoxelConvexityCriteria(
+                    seed_point, seed_normal, seed_point, c, n, -0.01) == 1) {
+                labels[idx] = 1;
+                for (int j = -lenght; j <= lenght; j++) {
+                   for (int k = -lenght; k <= lenght; k++) {
+                      int index = (idx + (j * input_size_.width)) + k;
+                      if (index >= 0 && index < cloud->size()) {
+                         temp_list.push_back(index);
+                      }
+                   }
+                }
+             }
+          }
+       }
+       processing_list.clear();
+       processing_list.insert(processing_list.end(), temp_list.begin(),
+                              temp_list.end());
+    }
+    src_points->clear();
+    for (int i = 0; i < labels.size(); i+=5) {
+       if (labels[i] != -1) {
+          PointNormalT pt;
+          pt.x = cloud->points[i].x;
+          pt.y = cloud->points[i].y;
+          pt.z = cloud->points[i].z;
+          pt.r = cloud->points[i].r;
+          pt.g = cloud->points[i].g;
+          pt.b = cloud->points[i].b;
+          pt.normal_x = normals->points[i].normal_x;
+          pt.normal_y = normals->points[i].normal_y;
+          pt.normal_z = normals->points[i].normal_z;
+          src_points->push_back(pt);
+       }
+    }
+}
+
+int SimpleObjectSegmentation::seedVoxelConvexityCriteria(
+    Eigen::Vector4f seed_point, Eigen::Vector4f seed_normal,
+    Eigen::Vector4f c_centroid, Eigen::Vector4f n_centroid,
+    Eigen::Vector4f n_normal, const float thresh) {
+    float pt2seed_relation = FLT_MAX;
+    float seed2pt_relation = FLT_MAX;
+    pt2seed_relation = (n_centroid - seed_point).dot(n_normal);
+    seed2pt_relation = (seed_point - n_centroid).dot(seed_normal);
+    if (seed2pt_relation > thresh && pt2seed_relation > thresh) {
+       return 1;
+    } else {
+       return -1;
+    }
+}
 
 int main(int argc, char *argv[]) {
     ros::init(argc, argv, "simple_object_segmentation");

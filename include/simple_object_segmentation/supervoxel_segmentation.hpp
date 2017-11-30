@@ -1,3 +1,7 @@
+// Copyright (C) 2016 by Krishneel Chaudhary @ JSK Lab,
+// The University of Tokyo, Japan
+// krishneel@jsk.imi.i.u-tokyo.ac.jp
+
 #ifndef _SUPERVOXEL_SEGMENTATION_H_
 #define _SUPERVOXEL_SEGMENTATION_H_
 

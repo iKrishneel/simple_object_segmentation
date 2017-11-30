@@ -1,3 +1,6 @@
+// Copyright (C) 2016 by Krishneel Chaudhary @ JSK Lab,
+// The University of Tokyo, Japan
+// krishneel@jsk.imi.i.u-tokyo.ac.jp
 
 #include <simple_object_segmentation/supervoxel_segmentation.hpp>
 
