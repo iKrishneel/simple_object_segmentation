@@ -29,4 +29,4 @@ roslaunch simple_object_segmentation simple_object_segmentation.launch user_poin
 
 
 ## Sample Results
-<img src="data/sample.png" height="50%" />
+<img src="data/sample.png" width="50%" height="50%"/>
