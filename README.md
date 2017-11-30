@@ -20,6 +20,12 @@ catkin bt
 ```bash
 roslaunch simple_object_segmentation simple_object_segmentation.launch
 ```
+### options:
+user marks a point on the image_view2 and the region the point is segmented automatically
+```bash
+roslaunch simple_object_segmentation simple_object_segmentation.launch user_point:= true
+```
 
-## Network
+
+## Sample Results
 <img src="data/network.png" height="50%" />
