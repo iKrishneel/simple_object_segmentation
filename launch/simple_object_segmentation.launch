@@ -1,0 +1,23 @@
+<launch>
+  <arg name="points" default="/camera/depth_registered/points" />
+
+  <node pkg="simple_object_segmentation" type="simple_object_segmentation_node"
+	name="simple_object_segmentation" output="screen" clear_params="false">
+    <remap from="points" to="$(arg points)" />
+  </node>
+
+
+  <node pkg="jsk_pcl_ros" type="cluster_point_indices_decomposer" 
+	name="segmentation_decomposer">
+    <remap from="~input" to="cloud" />
+    <remap from="~target" to="indices" />
+    
+    <!-- <remap from="~align_planes" to="/multi_plane_estimate/output_refined_polygon" /> -->
+    <!-- <remap from="~align_planes_coefficients" to="/multi_plane_estimate/output_refined_coefficients" /> -->
+    <!-- <param name="align_boxes" value="true" /> -->
+    <!-- <param name="use_pca" value="true" /> -->
+    <!-- <param name="publish_clouds" value="false" /> -->
+    <!-- <param name="publish_tf" value="true" /> -->
+
+  </node>
+</launch>

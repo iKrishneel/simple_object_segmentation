@@ -4,12 +4,21 @@ project(simple_object_segmentation)
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
-find_package(catkin REQUIRED COMPONENTS
-  geometry_msgs
-  roscpp
-  rospy
-  sensor_msgs
-)
+find_package(catkin REQUIRED COMPONENTS cmake_modules std_msgs std_srvs geometry_msgs roscpp rospy 
+  sensor_msgs message_filters message_runtime  dynamic_reconfigure cv_bridge tf tf_conversions 
+  # message_generation
+ )
+
+find_package(PCL REQUIRED)
+include_directories(${PCL_INCLUDE_DIRS})
+link_directories(${PCL_LIBRARY_DIRS})
+
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -std=c++11 -Wextra -pedantic -O3 -Wno-long-long -fno-omit-frame-pointer -ftree-vectorize")
+
+find_package(OpenMP)
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
 
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
@@ -86,10 +95,9 @@ find_package(catkin REQUIRED COMPONENTS
 ##     and list every .cfg file to be processed
 
 ## Generate dynamic reconfigure parameters in the 'cfg' folder
-# generate_dynamic_reconfigure_options(
-#   cfg/DynReconf1.cfg
-#   cfg/DynReconf2.cfg
-# )
+generate_dynamic_reconfigure_options(
+  cfg/SupervoxelSegmentation.cfg
+  )
 
 ###################################
 ## catkin specific configuration ##
@@ -115,7 +123,7 @@ catkin_package(
 ## Your package locations should be listed before other locations
 # include_directories(include)
 include_directories(
-  ${catkin_INCLUDE_DIRS}
+  include ${catkin_INCLUDE_DIRS}
 )
 
 ## Declare a C++ library
@@ -129,16 +137,18 @@ include_directories(
 # add_dependencies(simple_object_segmentation ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Declare a C++ executable
-# add_executable(simple_object_segmentation_node src/simple_object_segmentation_node.cpp)
+add_executable(simple_object_segmentation_node 
+  src/simple_object_segmentation_node.cpp
+  src/supervoxel_segmentation.cpp)
 
 ## Add cmake target dependencies of the executable
 ## same as for the library above
 # add_dependencies(simple_object_segmentation_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Specify libraries to link a library or executable target against
-# target_link_libraries(simple_object_segmentation_node
-#   ${catkin_LIBRARIES}
-# )
+target_link_libraries(simple_object_segmentation_node
+  ${catkin_LIBRARIES} ${PCL_LIBRARIES}
+  )
 
 #############
 ## Install ##
