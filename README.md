@@ -17,15 +17,16 @@ catkin bt
 ```
 
 ## Running
+to run fully automatic segmentation
 ```bash
 roslaunch simple_object_segmentation simple_object_segmentation.launch
 ```
 ### options:
 user marks a point on the image_view2 and the region the point is segmented automatically
 ```bash
-roslaunch simple_object_segmentation simple_object_segmentation.launch user_point:= true
+roslaunch simple_object_segmentation simple_object_segmentation.launch user_point:=true
 ```
 
 
 ## Sample Results
-<img src="data/network.png" height="50%" />
+<img src="data/sample.png" height="50%" />
