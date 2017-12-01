@@ -42,4 +42,4 @@ The user control parameters are defined in `./cfg/SupervoxelSegmentation.cfg`. T
 
 
 ## Sample Results
-<img src="data/sample.png" width="80%" height="80%"/>
+<img src="data/sample.png" width="100%" height="100%"/>
