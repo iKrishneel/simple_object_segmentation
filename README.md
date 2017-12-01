@@ -20,8 +20,8 @@ to run fully automatic segmentation
 roslaunch simple_object_segmentation simple_object_segmentation.launch
 ```
 ### options:
-[DEFAULT] setting is none, whereby whole scene is segmented 
-* [jsk_recognition](https://github.com/jsk-ros-pkg/jsk_recognition) is required for visualization 
+[**DEFAULT**] setting is none, whereby whole scene is segmented 
+* [jsk_recognition](https://github.com/jsk-ros-pkg/jsk_recognition) *is required for visualization*
 ```bash
 roslaunch simple_object_segmentation simple_object_segmentation.launch user_input:=none
 ```
@@ -30,7 +30,8 @@ user marks a point on the image_view2 and the region the point is segmented auto
 ```bash
 roslaunch simple_object_segmentation simple_object_segmentation.launch user_input:=point
 ```
-user marks the object region using a 2D bounding box and the program segments the region of interest. [image_view2](https://github.com/jsk-ros-pkg/jsk_common)
+user marks the object region using a 2D bounding box and the program segments the region of interest. 
+* [image_view2](https://github.com/jsk-ros-pkg/jsk_common) *for marking the region on the image*
 ```bash
 roslaunch simple_object_segmentation simple_object_segmentation.launch user_input:=rect
 ```
