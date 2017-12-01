@@ -20,7 +20,7 @@ to run fully automatic segmentation
 ```bash
 roslaunch simple_object_segmentation simple_object_segmentation.launch
 ```
-### options:
+### options
 [**DEFAULT**] setting is none, whereby whole scene is segmented 
 * [jsk_recognition](https://github.com/jsk-ros-pkg/jsk_recognition) *is required for visualization*
 ```bash
@@ -37,7 +37,7 @@ user marks the object region using a 2D bounding box and the program segments th
 roslaunch simple_object_segmentation simple_object_segmentation.launch user_input:=rect
 ```
 
-### Parameters:
+### Parameters
 The user control parameters are defined in `./cfg/SupervoxelSegmentation.cfg`. The pameters are for controlling the supervoxel segmentation. The details and functions of the parameters can be found in the [pcl tutorial page.](http://pointclouds.org/documentation/tutorials/supervoxel_clustering.php)
 
 
