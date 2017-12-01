@@ -24,7 +24,15 @@ roslaunch simple_object_segmentation simple_object_segmentation.launch
 ### options:
 user marks a point on the image_view2 and the region the point is segmented automatically
 ```bash
-roslaunch simple_object_segmentation simple_object_segmentation.launch user_point:=true
+roslaunch simple_object_segmentation simple_object_segmentation.launch user_input:=point
+```
+user marks the object region using a 2D bounding box and the program segments the region of interest.
+```bash
+roslaunch simple_object_segmentation simple_object_segmentation.launch user_input:=rect
+```
+default setting is none, whereby whole scene is segmented
+```bash
+roslaunch simple_object_segmentation simple_object_segmentation.launch user_input:=none
 ```
 
 
