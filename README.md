@@ -21,7 +21,7 @@ roslaunch simple_object_segmentation simple_object_segmentation.launch
 ```
 ### options:
 [DEFAULT] setting is none, whereby whole scene is segmented 
-_ [jsk_recognition](https://github.com/jsk-ros-pkg/jsk_recognition) is required for visualization _
+* [jsk_recognition](https://github.com/jsk-ros-pkg/jsk_recognition) is required for visualization *
 ```bash
 roslaunch simple_object_segmentation simple_object_segmentation.launch user_input:=none
 ```
