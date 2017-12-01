@@ -1,6 +1,6 @@
 # Simple Object Segmentation
 ROS Node for segmenting unknown objects using simple geometrical heuristics. 
-The node takes point cloud data from RGB--D sensor or stereo camera as inputs.
+The node takes point cloud data from RGB--D sensor or stereo camera as input.
 
 ## Requirements
 - [ROS](http://wiki.ros.org/indigo) >= indigo
