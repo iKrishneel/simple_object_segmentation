@@ -5,31 +5,41 @@
 #include <simple_object_segmentation/simple_object_segmentation.hpp>
 
 SimpleObjectSegmentation::SimpleObjectSegmentation() :
-    num_threads_(2), user_point_(false) {
-    this->pnh_.param("user_point", this->user_point_, true);
+    num_threads_(2), neigbor_size_(16) {
+    std::string type;
+    this->pnh_.param<std::string>("user_input", this->user_in_type_, "none");
+    this->kdtree_ = pcl::KdTreeFLANN<PointT>::Ptr(new pcl::KdTreeFLANN<PointT>);
     this->onInit();
 }
 
 void SimpleObjectSegmentation::onInit() {
     this->subscribe();
-
+    
     this->pub_cloud_ = this->pnh_.advertise<sensor_msgs::PointCloud2>(
        "/cloud", 1);
     this->pub_indices_ = this->pnh_.advertise<
        jsk_recognition_msgs::ClusterPointIndices>("/indices", 1);
-
 }
 
 void SimpleObjectSegmentation::subscribe() {
-
-    if (this->user_point_) {
+    if (this->user_in_type_ == "rect") {
        this->sub_point_.subscribe(this->pnh_, "points", 1);
        this->sub_rect_.subscribe(this->pnh_, "rect", 1);
        this->sync_ = boost::make_shared<message_filters::Synchronizer<
           SyncPolicy> >(100);
        this->sync_->connectInput(this->sub_point_, this->sub_rect_);
        this->sync_->registerCallback(
-          boost::bind(&SimpleObjectSegmentation::callback, this, _1, _2));
+          boost::bind(&SimpleObjectSegmentation::callbackRect, this, _1, _2));
+    } else if (this->user_in_type_ == "point") {
+       ROS_WARN("RUNNING POINT");
+       
+       this->sub_point_.subscribe(this->pnh_, "points", 1);
+       this->sub_screen_pt_.subscribe(this->pnh_, "screen_pt", 1);
+       this->sync2_ = boost::make_shared<message_filters::Synchronizer<
+          SyncPolicy2> >(100);
+       this->sync2_->connectInput(this->sub_point_, this->sub_screen_pt_);
+       this->sync2_->registerCallback(
+          boost::bind(&SimpleObjectSegmentation::callbackPoint, this, _1, _2));
     } else {
        this->sub_cloud_ = this->pnh_.subscribe(
           "points", 1, &SimpleObjectSegmentation::callback, this);
@@ -37,7 +47,7 @@ void SimpleObjectSegmentation::subscribe() {
 }
 
 void SimpleObjectSegmentation::unsubscribe() {
-    if (this->user_point_) {
+    if (this->user_in_type_ == "rect") {
        this->sub_point_.unsubscribe();
        this->sub_rect_.unsubscribe();
     } else {
@@ -60,7 +70,7 @@ void SimpleObjectSegmentation::callback(
     this->segment(cloud);
 }
 
-void SimpleObjectSegmentation::callback(
+void SimpleObjectSegmentation::callbackRect(
     const sensor_msgs::PointCloud2::ConstPtr &cloud_msg,
     const geometry_msgs::PolygonStamped::ConstPtr &rect_msg) {
     PointCloud::Ptr cloud(new PointCloud);
@@ -102,17 +112,156 @@ void SimpleObjectSegmentation::callback(
     this->pub_cloud_.publish(ros_cloud);
 }
 
+void SimpleObjectSegmentation::callbackPoint(
+    const sensor_msgs::PointCloud2::ConstPtr &cloud_msg,
+    const geometry_msgs::PointStamped::ConstPtr &screen_msg) {
+    PointCloud::Ptr cloud(new PointCloud);
+    pcl::fromROSMsg(*cloud_msg, *cloud);
+    if (cloud->empty()) {
+       ROS_ERROR("[::cloudCB]: EMPTY INPUTS");
+       return;
+    }
+
+    assert((cloud->width != 1 || cloud->height != 1)  &&
+          "\033[31m UNORGANIZED INPUT CLOUD \033[0m");
+
+    int seed_index = screen_msg->point.x + (cloud->width * screen_msg->point.y);
+    PointT seed_point = cloud->points[seed_index];
+    if (isnan(seed_point.x) || isnan(seed_point.x) || isnan(seed_point.x)) {
+       ROS_ERROR("SELETED POINT IS NAN");
+       return;
+    }
+    
+    PointNormal::Ptr normals(new PointNormal);
+    this->getNormals(normals, cloud);
+
+    // TODO(^_^): change to pointnormal type
+    PointCloud::Ptr in_cloud(new PointCloud);
+    PointNormal::Ptr in_normal(new PointNormal);
+    int updated_index = -1;
+    for (int i = 0; i < cloud->size(); i++) {
+       PointT pt = cloud->points[i];
+       if (!std::isnan(pt.x) && !std::isnan(pt.y) && !std::isnan(pt.z)) {
+          in_cloud->push_back(pt);
+          in_normal->push_back(normals->points[i]);
+
+          if (i == seed_index) {
+             updated_index = static_cast<int>(in_cloud->size());
+          }
+       }
+    }
+    seed_index = updated_index;
+    
+    if (in_cloud->size() != in_normal->size()) {
+       ROS_ERROR("CLOUD AND NORMALS SIZES ARE DIFF");
+       return;
+    }
+
+    std::vector<int> labels(static_cast<int>(in_cloud->size()));
+    for (int i = 0; i < in_cloud->size(); i++) {
+       if (i == seed_index) {
+          labels[i] = 1;
+       }
+       labels[i] = -1;
+    }
+    this->kdtree_->setInputCloud(in_cloud);
+    this->seedCorrespondingRegion(labels, in_cloud, in_normal, seed_index);
+
+    cloud->clear();
+    for (int i = 0; i < labels.size(); i++) {
+       if (labels[i] != -1) {
+          cloud->push_back(in_cloud->points[i]);
+       }
+    }
+    
+    sensor_msgs::PointCloud2 ros_cloud;
+    pcl::toROSMsg(*cloud, ros_cloud);
+    ros_cloud.header = cloud_msg->header;
+    this->pub_cloud_.publish(ros_cloud);
+}
+
+void SimpleObjectSegmentation::seedCorrespondingRegion(
+    std::vector<int> &labels, const PointCloud::Ptr cloud,
+    const PointNormal::Ptr normals, const int parent_index) {
+    std::vector<int> neigbor_indices;
+    this->getPointNeigbour<int>(neigbor_indices, cloud,
+                                cloud->points[parent_index],
+                                this->neigbor_size_);
+
+    int neigb_lenght = static_cast<int>(neigbor_indices.size());
+
+    
+    std::vector<int> merge_list(neigb_lenght);
+    merge_list[0] = -1;
+
+#ifdef _OPENMP
+#pragma omp parallel for num_threads(this->num_threads_)        \
+    shared(merge_list, labels)
+#endif
+    for (int i = 1; i < neigbor_indices.size(); i++) {
+       int index = neigbor_indices[i];
+       if (index != parent_index && labels[index] == -1) {
+          Eigen::Vector4f parent_pt = cloud->points[
+             parent_index].getVector4fMap();
+          Eigen::Vector4f parent_norm = normals->points[
+             parent_index].getNormalVector4fMap();
+          Eigen::Vector4f child_pt = cloud->points[index].getVector4fMap();
+          Eigen::Vector4f child_norm = normals->points[
+             index].getNormalVector4fMap();
+          
+          if (this->seedVoxelConvexityCriteria(
+                 parent_pt, parent_norm, child_pt, child_norm, -0.01f) == 1) {
+             merge_list[i] = index;
+             labels[index] = 1;
+          } else {
+             merge_list[i] = -1;
+          }
+       } else {
+          merge_list[i] = -1;
+       }
+    }
+#ifdef _OPENMP
+#pragma omp parallel for num_threads(this->num_threads_) schedule(guided, 1)
+#endif
+    for (int i = 0; i < merge_list.size(); i++) {
+       int index = merge_list[i];
+       if (index != -1) {
+          seedCorrespondingRegion(labels, cloud, normals, index);
+       }
+    }
+}
+
+template<class T>
+void SimpleObjectSegmentation::getPointNeigbour(
+    std::vector<int> &neigbor_indices, const PointCloud::Ptr cloud,
+    const PointT seed_point, const T K, bool is_knn) {
+    if (cloud->empty() || isnan(seed_point.x) ||
+        isnan(seed_point.y) || isnan(seed_point.z)) {
+       ROS_ERROR("THE CLOUD IS EMPTY. RETURING VOID IN GET NEIGBOUR");
+       return;
+    }
+    neigbor_indices.clear();
+    std::vector<float> point_squared_distance;
+    if (is_knn) {
+       int search_out = kdtree_->nearestKSearch(
+          seed_point, K, neigbor_indices, point_squared_distance);
+    } else {
+       int search_out = kdtree_->radiusSearch(
+          seed_point, K, neigbor_indices, point_squared_distance);
+    }
+}
+
 void SimpleObjectSegmentation::getNormals(
     PointNormal::Ptr normals, const PointCloud::Ptr cloud) {
     if (cloud->empty()) {
        ROS_ERROR("-Input cloud is empty in normal estimation");
        return;
     }
-    ne_.setNormalEstimationMethod(ne_.AVERAGE_3D_GRADIENT);
-    ne_.setMaxDepthChangeFactor(0.02f);
-    ne_.setNormalSmoothingSize(10.0f);
-    ne_.setInputCloud(cloud);
-    ne_.compute(*normals);
+    this->ne_.setNormalEstimationMethod(this->ne_.AVERAGE_3D_GRADIENT);
+    this->ne_.setMaxDepthChangeFactor(0.02f);
+    this->ne_.setNormalSmoothingSize(10.0f);
+    this->ne_.setInputCloud(cloud);
+    this->ne_.compute(*normals);
 }
 
 void SimpleObjectSegmentation::segment(
@@ -273,7 +422,7 @@ void SimpleObjectSegmentation::fastSeedRegionGrowing(
              Eigen::Vector4f c = cloud->points[idx].getVector4fMap();
              Eigen::Vector4f n = normals->points[idx].getNormalVector4fMap();
              if (this->seedVoxelConvexityCriteria(
-                    seed_point, seed_normal, seed_point, c, n, -0.01) == 1) {
+                    seed_point, seed_normal, c, n, -0.01) == 1) {
                 labels[idx] = 1;
                 for (int j = -lenght; j <= lenght; j++) {
                    for (int k = -lenght; k <= lenght; k++) {
@@ -310,8 +459,7 @@ void SimpleObjectSegmentation::fastSeedRegionGrowing(
 
 int SimpleObjectSegmentation::seedVoxelConvexityCriteria(
     Eigen::Vector4f seed_point, Eigen::Vector4f seed_normal,
-    Eigen::Vector4f c_centroid, Eigen::Vector4f n_centroid,
-    Eigen::Vector4f n_normal, const float thresh) {
+    Eigen::Vector4f n_centroid, Eigen::Vector4f n_normal, const float thresh) {
     float pt2seed_relation = FLT_MAX;
     float seed2pt_relation = FLT_MAX;
     pt2seed_relation = (n_centroid - seed_point).dot(n_normal);
@@ -329,4 +477,3 @@ int main(int argc, char *argv[]) {
     ros::spin();
     return 0;
 }
-

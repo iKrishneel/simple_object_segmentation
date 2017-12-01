@@ -1,20 +1,23 @@
 <launch>
   <arg name="points" default="/camera/depth_registered/points" />
   <arg name="rect" default="/camera/rgb/image_rect_color/screenrectangle" />
+  <arg name="screen_pt" default="/camera/rgb/image_rect_color/screenpoint" />
   
-  <arg name="user_point" default="false" />
+  <arg name="visualize" default="true" />
+  <arg name="user_input" default="none" />
 
   <node pkg="simple_object_segmentation" type="simple_object_segmentation_node"
 	name="simple_object_segmentation" output="screen" clear_params="false">
     <remap from="points" to="$(arg points)" />
     <remap from="rect" to="$(arg rect)" />
+    <remap from="screen_pt" to="$(arg screen_pt)" />
 
-    <param name="user_point" value="$(arg user_point)" />
-    <remap from="user_point" to="/simple_object_segmentation/user_point" />
+    <param name="user_input" value="$(arg user_input)" />
+    <remap from="user_input" to="/simple_object_segmentation/user_input" />
 
   </node>
 
-  <group unless="$(arg user_point)" >
+  <group if="$(arg visualize)" >
     <node pkg="jsk_pcl_ros" type="cluster_point_indices_decomposer" 
 	  name="segmentation_decomposer">
       <remap from="~input" to="cloud" />

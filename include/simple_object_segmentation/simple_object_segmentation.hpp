@@ -14,7 +14,8 @@
 #include <message_filters/sync_policies/approximate_time.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <geometry_msgs/PolygonStamped.h>
-
+#include <geometry_msgs/PointStamped.h>
+#include <pcl/kdtree/kdtree_flann.h>
 #include <opencv2/opencv.hpp>
 #include <simple_object_segmentation/supervoxel_segmentation.hpp>
 
@@ -35,17 +36,26 @@ class SimpleObjectSegmentation: public SupervoxelSegmentation {
     message_filters::Subscriber<sensor_msgs::PointCloud2> sub_point_;
     message_filters::Subscriber<geometry_msgs::PolygonStamped> sub_rect_;
     boost::shared_ptr<message_filters::Synchronizer<SyncPolicy> >sync_;
+
+    typedef message_filters::sync_policies::ApproximateTime<
+       sensor_msgs::PointCloud2, geometry_msgs::PointStamped> SyncPolicy2;
+    // message_filters::Subscriber<sensor_msgs::PointCloud2> sub_points_;
+    message_filters::Subscriber<geometry_msgs::PointStamped> sub_screen_pt_;
+    boost::shared_ptr<message_filters::Synchronizer<SyncPolicy2> >sync2_;
    
     pcl::IntegralImageNormalEstimation<PointT, NormalT> ne_;
     int num_threads_;
 
     std_msgs::Header header_;
-    bool user_point_;
-
+    std::string user_in_type_;
+   
     cv::Size input_size_;
     cv::Rect_<int> rect_;
 
-protected:
+    pcl::KdTreeFLANN<PointT>::Ptr kdtree_;
+    int neigbor_size_;
+   
+ protected:
     virtual void onInit();
     virtual void subscribe();
     virtual void unsubscribe();
@@ -59,8 +69,10 @@ protected:
  public:
     SimpleObjectSegmentation();
     void callback(const sensor_msgs::PointCloud2::ConstPtr &);
-    void callback(const sensor_msgs::PointCloud2::ConstPtr &,
-                  const geometry_msgs::PolygonStamped::ConstPtr &);
+    void callbackRect(const sensor_msgs::PointCloud2::ConstPtr &,
+                         const geometry_msgs::PolygonStamped::ConstPtr &);
+    void callbackPoint(const sensor_msgs::PointCloud2::ConstPtr &,
+                       const geometry_msgs::PointStamped::ConstPtr &);
     void getNormals(PointNormal::Ptr, const PointCloud::Ptr);
     void segment(const PointCloud::Ptr);
     float convexityCriteria(Eigen::Vector4f, Eigen::Vector4f,
@@ -68,11 +80,16 @@ protected:
                             const float = -0.01f, bool = false);
     int seedVoxelConvexityCriteria(Eigen::Vector4f, Eigen::Vector4f,
                                    Eigen::Vector4f, Eigen::Vector4f,
-                                   Eigen::Vector4f, const float = 0.01f);
+                                   const float = -0.01f);
     void segmentRecursiveCC(UInt32Map &, int &, const AdjacentList,
                             const SupervoxelMap, const uint32_t);
     void fastSeedRegionGrowing(PointCloudNormal::Ptr, const PointCloud::Ptr,
                                const PointNormal::Ptr);
+    void seedCorrespondingRegion(std::vector<int> &, const PointCloud::Ptr,
+                                 const PointNormal::Ptr, const int);
+    template<class T>
+    void getPointNeigbour(std::vector<int> &, const PointCloud::Ptr,
+                          const PointT, const T = 16, bool = true);
 };
 
 
