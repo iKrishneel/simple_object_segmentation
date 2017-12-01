@@ -21,11 +21,12 @@ roslaunch simple_object_segmentation simple_object_segmentation.launch
 ```
 ### options:
 [DEFAULT] setting is none, whereby whole scene is segmented 
-* [jsk_recognition](https://github.com/jsk-ros-pkg/jsk_recognition) is required for visualization *
+* [jsk_recognition](https://github.com/jsk-ros-pkg/jsk_recognition) is required for visualization 
 ```bash
 roslaunch simple_object_segmentation simple_object_segmentation.launch user_input:=none
 ```
-user marks a point on the image_view2 and the region the point is segmented automatically [image_view2](https://github.com/jsk-ros-pkg/jsk_common) is required
+user marks a point on the image_view2 and the region the point is segmented automatically 
+* [image_view2](https://github.com/jsk-ros-pkg/jsk_common) *is required*
 ```bash
 roslaunch simple_object_segmentation simple_object_segmentation.launch user_input:=point
 ```
