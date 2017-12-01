@@ -38,7 +38,8 @@ roslaunch simple_object_segmentation simple_object_segmentation.launch user_inpu
 ```
 
 ### Paramets:
-The user control parameters are defined in `./cfg` folder. The pameters are for controlling the supervoxel segmentation. The details and functions of the parameters can be found in the [pcl tutorial page](http://pointclouds.org/documentation/tutorials/supervoxel_clustering.php)
+The user control parameters are defined in `./cfg/SupervoxelSegmentation.cfg` folder. The pameters are for controlling the supervoxel segmentation. The details and functions of the parameters can be found in the [pcl tutorial page.](http://pointclouds.org/documentation/tutorials/supervoxel_clustering.php)
+
 
 ## Sample Results
 <img src="data/sample.png" width="80%" height="80%"/>
