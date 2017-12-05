@@ -155,33 +155,6 @@ void SimpleObjectSegmentation::callbackPoint(
     seed_index = idx;
     this->seed_point_ = cloud->points[seed_index];
     this->seed_normal_ = normals->points[seed_index];
-
-    // TODO(^_^): change to pointnormal type
-    PointCloud::Ptr in_cloud(new PointCloud);
-
-    /*
-      PointNormal::Ptr in_normal(new PointNormal);
-    // double dist = DBL_MAX;
-    int index = -1;
-    for (int i = 0; i < cloud->size(); i++) {
-       PointT pt = cloud->points[i];
-       NormalT nt = normals->points[i];
-       if (!std::isnan(pt.x) && !std::isnan(pt.y) && !std::isnan(pt.z) &&
-           !std::isnan(nt.normal_x) && !std::isnan(nt.normal_y) &&
-           !std::isnan(nt.normal_z)) {
-          in_cloud->push_back(pt);
-          in_normal->push_back(nt);
-          
-          double d = pcl::distances::l2(pt.getVector4fMap(),
-                                       seed_point_.getVector4fMap());
-          if (d < dist) {
-             dist = d;
-             index = static_cast<int>(in_cloud->size()) - 1;
-          }
-       }
-    }
-    seed_index = index;
-    */
     
     if (cloud->size() != normals->size()) {
        ROS_ERROR("CLOUD AND NORMALS SIZES ARE DIFF");
@@ -199,7 +172,7 @@ void SimpleObjectSegmentation::callbackPoint(
     this->kdtree_->setInputCloud(cloud);
     this->seedCorrespondingRegion(labels, cloud, normals, seed_index);
 
-    cloud->clear();
+    PointCloud::Ptr in_cloud(new PointCloud);
     for (int i = 0; i < labels.size(); i++) {
        if (labels[i] != -1) {
           in_cloud->push_back(cloud->points[i]);
@@ -221,8 +194,6 @@ void SimpleObjectSegmentation::seedCorrespondingRegion(
                                 this->neigbor_size_);
 
     int neigb_lenght = static_cast<int>(neigbor_indices.size());
-
-    
     std::vector<int> merge_list(neigb_lenght);
     merge_list[0] = -1;
 
