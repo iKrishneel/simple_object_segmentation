@@ -15,7 +15,12 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <geometry_msgs/PolygonStamped.h>
 #include <geometry_msgs/PointStamped.h>
+
 #include <pcl/kdtree/kdtree_flann.h>
+#include <pcl/registration/distances.h>
+#include <pcl/filters/extract_indices.h>
+#include <pcl/features/normal_3d_omp.h>
+
 #include <opencv2/opencv.hpp>
 #include <simple_object_segmentation/supervoxel_segmentation.hpp>
 
@@ -54,6 +59,10 @@ class SimpleObjectSegmentation: public SupervoxelSegmentation {
 
     pcl::KdTreeFLANN<PointT>::Ptr kdtree_;
     int neigbor_size_;
+    float cc_thresh_;
+    PointT seed_point_;
+    NormalT seed_normal_;
+   
    
  protected:
     virtual void onInit();
@@ -74,6 +83,9 @@ class SimpleObjectSegmentation: public SupervoxelSegmentation {
     void callbackPoint(const sensor_msgs::PointCloud2::ConstPtr &,
                        const geometry_msgs::PointStamped::ConstPtr &);
     void getNormals(PointNormal::Ptr, const PointCloud::Ptr);
+    template<class T>
+    void getNormals(const PointCloud::Ptr, PointNormal::Ptr,
+                    T = 0.05f, bool = false) const;
     void segment(const PointCloud::Ptr);
     float convexityCriteria(Eigen::Vector4f, Eigen::Vector4f,
                             Eigen::Vector4f, Eigen::Vector4f,
@@ -81,6 +93,8 @@ class SimpleObjectSegmentation: public SupervoxelSegmentation {
     int seedVoxelConvexityCriteria(Eigen::Vector4f, Eigen::Vector4f,
                                    Eigen::Vector4f, Eigen::Vector4f,
                                    const float = -0.01f);
+    int seedVoxelConvexityCriteria(Eigen::Vector4f, Eigen::Vector4f,
+                                   Eigen::Vector4f, const float);
     void segmentRecursiveCC(UInt32Map &, int &, const AdjacentList,
                             const SupervoxelMap, const uint32_t);
     void fastSeedRegionGrowing(PointCloudNormal::Ptr, const PointCloud::Ptr,

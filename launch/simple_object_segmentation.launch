@@ -5,6 +5,7 @@
   
   <arg name="visualize" default="true" />
   <arg name="user_input" default="none" />
+  <arg name="cc_thresh" default="-0.01" />
 
   <node pkg="simple_object_segmentation" type="simple_object_segmentation_node"
 	name="simple_object_segmentation" output="screen" clear_params="false">
@@ -14,6 +15,9 @@
 
     <param name="user_input" value="$(arg user_input)" />
     <remap from="user_input" to="/simple_object_segmentation/user_input" />
+
+    <param name="cc_thresh" value="$(arg cc_thresh)" />
+    <remap from="cc_thresh" to="/simple_object_segmentation/cc_thresh" />
 
   </node>
 

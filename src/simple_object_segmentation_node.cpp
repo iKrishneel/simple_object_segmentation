@@ -5,9 +5,11 @@
 #include <simple_object_segmentation/simple_object_segmentation.hpp>
 
 SimpleObjectSegmentation::SimpleObjectSegmentation() :
-    num_threads_(2), neigbor_size_(16) {
+    num_threads_(8), neigbor_size_(26), cc_thresh_(-0.01f) {
     std::string type;
     this->pnh_.param<std::string>("user_input", this->user_in_type_, "none");
+    this->pnh_.param<float>("cc_thresh", this->cc_thresh_, -0.01);
+    
     this->kdtree_ = pcl::KdTreeFLANN<PointT>::Ptr(new pcl::KdTreeFLANN<PointT>);
     this->onInit();
 }
@@ -23,6 +25,7 @@ void SimpleObjectSegmentation::onInit() {
 
 void SimpleObjectSegmentation::subscribe() {
     if (this->user_in_type_ == "rect") {
+       ROS_INFO("\033[34mRUN TYPE RECT\033[0m");
        this->sub_point_.subscribe(this->pnh_, "points", 1);
        this->sub_rect_.subscribe(this->pnh_, "rect", 1);
        this->sync_ = boost::make_shared<message_filters::Synchronizer<
@@ -31,8 +34,7 @@ void SimpleObjectSegmentation::subscribe() {
        this->sync_->registerCallback(
           boost::bind(&SimpleObjectSegmentation::callbackRect, this, _1, _2));
     } else if (this->user_in_type_ == "point") {
-       ROS_WARN("RUNNING POINT");
-       
+       ROS_INFO("\033[34mRUN TYPE POINT\033[0m");
        this->sub_point_.subscribe(this->pnh_, "points", 1);
        this->sub_screen_pt_.subscribe(this->pnh_, "screen_pt", 1);
        this->sync2_ = boost::make_shared<message_filters::Synchronizer<
@@ -41,6 +43,7 @@ void SimpleObjectSegmentation::subscribe() {
        this->sync2_->registerCallback(
           boost::bind(&SimpleObjectSegmentation::callbackPoint, this, _1, _2));
     } else {
+       ROS_INFO("\033[34mRUN TYPE AUTO\033[0m");
        this->sub_cloud_ = this->pnh_.subscribe(
           "points", 1, &SimpleObjectSegmentation::callback, this);
     }
@@ -126,56 +129,85 @@ void SimpleObjectSegmentation::callbackPoint(
           "\033[31m UNORGANIZED INPUT CLOUD \033[0m");
 
     int seed_index = screen_msg->point.x + (cloud->width * screen_msg->point.y);
-    PointT seed_point = cloud->points[seed_index];
-    if (isnan(seed_point.x) || isnan(seed_point.x) || isnan(seed_point.x)) {
+    this->seed_point_ = cloud->points[seed_index];
+    if (isnan(seed_point_.x) || isnan(seed_point_.x) || isnan(seed_point_.x)) {
        ROS_ERROR("SELETED POINT IS NAN");
        return;
     }
+
+    std::vector<int> nan_indices;
+    pcl::removeNaNFromPointCloud<PointT>(*cloud, *cloud, nan_indices);
+
+    double dist = DBL_MAX;
+    int idx = -1;
+    for (int i = 0; i < cloud->size(); i++) {
+       double d = pcl::distances::l2(cloud->points[i].getVector4fMap(),
+                                     seed_point_.getVector4fMap());
+       if (d < dist) {
+          dist = d;
+          idx = i;
+       }
+    }
     
     PointNormal::Ptr normals(new PointNormal);
-    this->getNormals(normals, cloud);
+    this->getNormals<float>(cloud, normals, 0.03f, false);
+    
+    seed_index = idx;
+    this->seed_point_ = cloud->points[seed_index];
+    this->seed_normal_ = normals->points[seed_index];
 
     // TODO(^_^): change to pointnormal type
     PointCloud::Ptr in_cloud(new PointCloud);
-    PointNormal::Ptr in_normal(new PointNormal);
-    int updated_index = -1;
+
+    /*
+      PointNormal::Ptr in_normal(new PointNormal);
+    // double dist = DBL_MAX;
+    int index = -1;
     for (int i = 0; i < cloud->size(); i++) {
        PointT pt = cloud->points[i];
-       if (!std::isnan(pt.x) && !std::isnan(pt.y) && !std::isnan(pt.z)) {
+       NormalT nt = normals->points[i];
+       if (!std::isnan(pt.x) && !std::isnan(pt.y) && !std::isnan(pt.z) &&
+           !std::isnan(nt.normal_x) && !std::isnan(nt.normal_y) &&
+           !std::isnan(nt.normal_z)) {
           in_cloud->push_back(pt);
-          in_normal->push_back(normals->points[i]);
-
-          if (i == seed_index) {
-             updated_index = static_cast<int>(in_cloud->size());
+          in_normal->push_back(nt);
+          
+          double d = pcl::distances::l2(pt.getVector4fMap(),
+                                       seed_point_.getVector4fMap());
+          if (d < dist) {
+             dist = d;
+             index = static_cast<int>(in_cloud->size()) - 1;
           }
        }
     }
-    seed_index = updated_index;
+    seed_index = index;
+    */
     
-    if (in_cloud->size() != in_normal->size()) {
+    if (cloud->size() != normals->size()) {
        ROS_ERROR("CLOUD AND NORMALS SIZES ARE DIFF");
        return;
     }
-
-    std::vector<int> labels(static_cast<int>(in_cloud->size()));
-    for (int i = 0; i < in_cloud->size(); i++) {
-       if (i == seed_index) {
-          labels[i] = 1;
-       }
-       labels[i] = -1;
+    
+    std::vector<int> labels(static_cast<int>(cloud->size()), -1);
+    
+    if (labels.size() < seed_index) {
+       ROS_WARN("INCORRECT SIZES");
+       return;
     }
-    this->kdtree_->setInputCloud(in_cloud);
-    this->seedCorrespondingRegion(labels, in_cloud, in_normal, seed_index);
+    labels[seed_index] = 1;
+    
+    this->kdtree_->setInputCloud(cloud);
+    this->seedCorrespondingRegion(labels, cloud, normals, seed_index);
 
     cloud->clear();
     for (int i = 0; i < labels.size(); i++) {
        if (labels[i] != -1) {
-          cloud->push_back(in_cloud->points[i]);
+          in_cloud->push_back(cloud->points[i]);
        }
     }
     
     sensor_msgs::PointCloud2 ros_cloud;
-    pcl::toROSMsg(*cloud, ros_cloud);
+    pcl::toROSMsg(*in_cloud, ros_cloud);
     ros_cloud.header = cloud_msg->header;
     this->pub_cloud_.publish(ros_cloud);
 }
@@ -208,9 +240,9 @@ void SimpleObjectSegmentation::seedCorrespondingRegion(
           Eigen::Vector4f child_pt = cloud->points[index].getVector4fMap();
           Eigen::Vector4f child_norm = normals->points[
              index].getNormalVector4fMap();
-          
           if (this->seedVoxelConvexityCriteria(
-                 parent_pt, parent_norm, child_pt, child_norm, -0.01f) == 1) {
+                 parent_norm, child_pt, child_norm,
+                 this->cc_thresh_) == 1) {
              merge_list[i] = index;
              labels[index] = 1;
           } else {
@@ -234,9 +266,9 @@ void SimpleObjectSegmentation::seedCorrespondingRegion(
 template<class T>
 void SimpleObjectSegmentation::getPointNeigbour(
     std::vector<int> &neigbor_indices, const PointCloud::Ptr cloud,
-    const PointT seed_point, const T K, bool is_knn) {
-    if (cloud->empty() || isnan(seed_point.x) ||
-        isnan(seed_point.y) || isnan(seed_point.z)) {
+    const PointT seed_point_, const T K, bool is_knn) {
+    if (cloud->empty() || isnan(seed_point_.x) ||
+        isnan(seed_point_.y) || isnan(seed_point_.z)) {
        ROS_ERROR("THE CLOUD IS EMPTY. RETURING VOID IN GET NEIGBOUR");
        return;
     }
@@ -244,10 +276,10 @@ void SimpleObjectSegmentation::getPointNeigbour(
     std::vector<float> point_squared_distance;
     if (is_knn) {
        int search_out = kdtree_->nearestKSearch(
-          seed_point, K, neigbor_indices, point_squared_distance);
+          seed_point_, K, neigbor_indices, point_squared_distance);
     } else {
        int search_out = kdtree_->radiusSearch(
-          seed_point, K, neigbor_indices, point_squared_distance);
+          seed_point_, K, neigbor_indices, point_squared_distance);
     }
 }
 
@@ -262,6 +294,27 @@ void SimpleObjectSegmentation::getNormals(
     this->ne_.setNormalSmoothingSize(10.0f);
     this->ne_.setInputCloud(cloud);
     this->ne_.compute(*normals);
+}
+
+template<class T>
+void SimpleObjectSegmentation::getNormals(
+    const PointCloud::Ptr cloud, PointNormal::Ptr normals,
+    const T k, bool use_knn) const {
+    if (cloud->empty()) {
+       ROS_ERROR("ERROR: The Input cloud is Empty.....");
+       return;
+    }
+    pcl::NormalEstimationOMP<PointT, NormalT> ne;
+    ne.setInputCloud(cloud);
+    ne.setNumberOfThreads(this->num_threads_);
+    pcl::search::KdTree<PointT>::Ptr tree (new pcl::search::KdTree<PointT> ());
+    ne.setSearchMethod(tree);
+    if (use_knn) {
+       ne.setKSearch(k);
+    } else {
+       ne.setRadiusSearch(k);
+    }
+    ne.compute(*normals);
 }
 
 void SimpleObjectSegmentation::segment(
@@ -347,7 +400,7 @@ void SimpleObjectSegmentation::segmentRecursiveCC(
             n_vindex)->centroid_.getVector4fMap();
          Eigen::Vector4f nn = supervoxel_clusters.at(
             n_vindex)->normal_.getNormalVector4fMap();
-         auto cc = convexityCriteria(sp, sn, np, nn, -0.0025f, true);
+         auto cc = convexityCriteria(sp, sn, np, nn, this->cc_thresh_, true);
          if (cc == 1.0f) {
             voxel_labels[n_vindex] = label;
             segmentRecursiveCC(voxel_labels, label, adjacency_list,
@@ -358,15 +411,15 @@ void SimpleObjectSegmentation::segmentRecursiveCC(
 }
 
 float SimpleObjectSegmentation::convexityCriteria(
-    Eigen::Vector4f seed_point, Eigen::Vector4f seed_normal,
+    Eigen::Vector4f seed_point_, Eigen::Vector4f seed_normal,
     Eigen::Vector4f n_centroid, Eigen::Vector4f n_normal,
     const float thresh, bool hard_label) {
     float pt2seed_relation = FLT_MAX;
     float seed2pt_relation = FLT_MAX;
-    pt2seed_relation = (n_centroid - seed_point).dot(n_normal);
-    seed2pt_relation = (seed_point - n_centroid).dot(seed_normal);
-    float angle = std::acos((seed_point.dot(n_centroid)) / (
-                               seed_point.norm() * n_centroid.norm()));
+    pt2seed_relation = (n_centroid - seed_point_).dot(n_normal);
+    seed2pt_relation = (seed_point_ - n_centroid).dot(seed_normal);
+    float angle = std::acos((seed_point_.dot(n_centroid)) / (
+                               seed_point_.norm() * n_centroid.norm()));
 
     if (seed2pt_relation > thresh && pt2seed_relation > thresh) {
        float w = std::exp(-angle / (2.0f * M_PI));
@@ -393,7 +446,7 @@ void SimpleObjectSegmentation::fastSeedRegionGrowing(
     }
     int seed_index = (rect_.x + rect_.width/2)  +
        (rect_.y + rect_.height/2) * input_size_.width;
-    Eigen::Vector4f seed_point = cloud->points[seed_index].getVector4fMap();
+    Eigen::Vector4f seed_point_ = cloud->points[seed_index].getVector4fMap();
     Eigen::Vector4f seed_normal = normals->points[
        seed_index].getNormalVector4fMap();
     std::vector<int> labels(static_cast<int>(cloud->size()), -1);
@@ -422,7 +475,7 @@ void SimpleObjectSegmentation::fastSeedRegionGrowing(
              Eigen::Vector4f c = cloud->points[idx].getVector4fMap();
              Eigen::Vector4f n = normals->points[idx].getNormalVector4fMap();
              if (this->seedVoxelConvexityCriteria(
-                    seed_point, seed_normal, c, n, -0.01) == 1) {
+                    seed_point_, seed_normal, c, n, this->cc_thresh_) == 1) {
                 labels[idx] = 1;
                 for (int j = -lenght; j <= lenght; j++) {
                    for (int k = -lenght; k <= lenght; k++) {
@@ -458,16 +511,38 @@ void SimpleObjectSegmentation::fastSeedRegionGrowing(
 }
 
 int SimpleObjectSegmentation::seedVoxelConvexityCriteria(
-    Eigen::Vector4f seed_point, Eigen::Vector4f seed_normal,
+    Eigen::Vector4f seed_point_, Eigen::Vector4f seed_normal,
     Eigen::Vector4f n_centroid, Eigen::Vector4f n_normal, const float thresh) {
     float pt2seed_relation = FLT_MAX;
     float seed2pt_relation = FLT_MAX;
-    pt2seed_relation = (n_centroid - seed_point).dot(n_normal);
-    seed2pt_relation = (seed_point - n_centroid).dot(seed_normal);
+    pt2seed_relation = (n_centroid - seed_point_).dot(n_normal);
+    seed2pt_relation = (seed_point_ - n_centroid).dot(seed_normal);
     if (seed2pt_relation > thresh && pt2seed_relation > thresh) {
        return 1;
     } else {
        return -1;
+    }
+}
+
+int SimpleObjectSegmentation::seedVoxelConvexityCriteria(
+    Eigen::Vector4f c_normal, Eigen::Vector4f n_centroid,
+    Eigen::Vector4f n_normal, const float thresh) {
+    float pt2seed_relation = FLT_MAX;
+    float seed2pt_relation = FLT_MAX;
+    pt2seed_relation = (n_centroid -
+                        this->seed_point_.getVector4fMap()).dot(n_normal);
+    seed2pt_relation = (this->seed_point_.getVector4fMap() - n_centroid).dot(
+       this->seed_normal_.getNormalVector4fMap());
+    float norm_similarity = (M_PI - std::acos(
+                                c_normal.dot(n_normal) /
+                                (c_normal.norm() * n_normal.norm()))) / M_PI;
+
+    if (seed2pt_relation > thresh &&
+        pt2seed_relation > thresh && norm_similarity > 0.50f) {
+       return 1;
+    } else {
+       return -1;
+
     }
 }
 
