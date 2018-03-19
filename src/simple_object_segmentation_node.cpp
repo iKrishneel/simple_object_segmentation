@@ -21,6 +21,8 @@ void SimpleObjectSegmentation::onInit() {
        "/cloud", 1);
     this->pub_indices_ = this->pnh_.advertise<
        jsk_recognition_msgs::ClusterPointIndices>("/indices", 1);
+    this->pub_centroid_ = this->pnh_.advertise<
+       geometry_msgs::PointStamped>("/object_centroid", 1);
 }
 
 void SimpleObjectSegmentation::subscribe() {
@@ -173,16 +175,74 @@ void SimpleObjectSegmentation::callbackPoint(
     this->seedCorrespondingRegion(labels, cloud, normals, seed_index);
 
     PointCloud::Ptr in_cloud(new PointCloud);
+    std::vector<pcl::PointIndices> all_indices(1);
+    int icounter = 0;
+
+    float min_z = FLT_MAX;
+    float min_y = FLT_MAX;
+    float min_x = FLT_MAX;
+
+    float max_z = 0.0f;
+    float max_y = 0.0f;
+    float max_x = 0.0f;
+    
+    float center_x = 0.0f;
+    float center_y = 0.0f;
+    float center_z = 0.0f;
+
     for (int i = 0; i < labels.size(); i++) {
        if (labels[i] != -1) {
           in_cloud->push_back(cloud->points[i]);
+          all_indices[0].indices.push_back(icounter++);
+
+          min_z = cloud->points[i].z < min_z ? cloud->points[i].z : min_z;
+          min_y = cloud->points[i].y < min_y ? cloud->points[i].y : min_y;
+          min_x = cloud->points[i].x < min_x ? cloud->points[i].x : min_x;
+
+          max_z = cloud->points[i].z > max_z ? cloud->points[i].z : max_z;
+          max_y = cloud->points[i].y > max_y ? cloud->points[i].y : max_y;
+          max_x = cloud->points[i].x > max_x ? cloud->points[i].x : max_x;
+          
+          center_z += cloud->points[i].z;
+          center_y += cloud->points[i].y;
+          center_x += cloud->points[i].x;
        }
     }
+    center_x /= static_cast<float>(in_cloud->size());
+    center_y /= static_cast<float>(in_cloud->size());
+    center_z /= static_cast<float>(in_cloud->size());
+
+    center_z = min_z + (max_z - min_z) / 2.0f;
+    center_y = min_y + (max_y - min_y) / 2.0f;
+    // center_x = min_x - (max_x - min_x) / 2.0f;
+    
+
+    //! cluster points indices
+    jsk_recognition_msgs::ClusterPointIndices ros_indices;
+    ros_indices.cluster_indices = this->convertToROSPointIndices(
+       all_indices, cloud_msg->header);
+    ros_indices.header = cloud_msg->header;
     
     sensor_msgs::PointCloud2 ros_cloud;
     pcl::toROSMsg(*in_cloud, ros_cloud);
     ros_cloud.header = cloud_msg->header;
+    
     this->pub_cloud_.publish(ros_cloud);
+    this->pub_indices_.publish(ros_indices);
+
+    //! publish object centeroid
+    Eigen::Vector4f centroid;
+    pcl::compute3DCentroid(*in_cloud, centroid);
+    geometry_msgs::PointStamped ros_point;
+    ros_point.header = cloud_msg->header;
+    // ros_point.point.x = centroid(0);
+    // ros_point.point.y = centroid(1);
+    // ros_point.point.z = centroid(2);
+
+    ros_point.point.x = center_x;
+    ros_point.point.y = center_y;
+    ros_point.point.z = center_z;
+    this->pub_centroid_.publish(ros_point);
 }
 
 void SimpleObjectSegmentation::seedCorrespondingRegion(
