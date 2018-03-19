@@ -74,6 +74,7 @@ class SimpleObjectSegmentation: public SupervoxelSegmentation {
     ros::Subscriber sub_cloud_;
     ros::Publisher pub_cloud_;
     ros::Publisher pub_indices_;
+    ros::Publisher pub_centroid_;
    
  public:
     SimpleObjectSegmentation();
