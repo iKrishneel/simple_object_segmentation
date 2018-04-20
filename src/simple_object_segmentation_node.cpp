@@ -130,7 +130,8 @@ void SimpleObjectSegmentation::callbackPoint(
 
     int seed_index = screen_msg->point.x + (cloud->width * screen_msg->point.y);
     this->seed_point_ = cloud->points[seed_index];
-    if (isnan(seed_point_.x) || isnan(seed_point_.x) || isnan(seed_point_.x)) {
+    if (std::isnan(seed_point_.x) || std::isnan(seed_point_.x) ||
+        std::isnan(seed_point_.x)) {
        ROS_ERROR("SELETED POINT IS NAN");
        return;
     }
@@ -238,8 +239,8 @@ template<class T>
 void SimpleObjectSegmentation::getPointNeigbour(
     std::vector<int> &neigbor_indices, const PointCloud::Ptr cloud,
     const PointT seed_point_, const T K, bool is_knn) {
-    if (cloud->empty() || isnan(seed_point_.x) ||
-        isnan(seed_point_.y) || isnan(seed_point_.z)) {
+    if (cloud->empty() || std::isnan(seed_point_.x) ||
+        std::isnan(seed_point_.y) || std::isnan(seed_point_.z)) {
        ROS_ERROR("THE CLOUD IS EMPTY. RETURING VOID IN GET NEIGBOUR");
        return;
     }
