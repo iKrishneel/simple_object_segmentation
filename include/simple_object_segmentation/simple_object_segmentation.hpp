@@ -26,8 +26,11 @@
 #include <sensor_msgs/JointState.h>
 #include <cv_bridge/cv_bridge.h>
 
+#include <simple_object_segmentation/ObjectSegmentation.h>
+
 #include <opencv2/opencv.hpp>
 #include <simple_object_segmentation/supervoxel_segmentation.hpp>
+
 
 class SimpleObjectSegmentation: public SupervoxelSegmentation {
 
@@ -74,6 +77,9 @@ class SimpleObjectSegmentation: public SupervoxelSegmentation {
 
     Eigen::Vector4f vertical_normal_;
     float head_tilt_angle_;
+
+    cv_bridge::CvImagePtr cv_ptr_;
+    bool is_srv_;
    
  protected:
     virtual void onInit();
@@ -86,6 +92,8 @@ class SimpleObjectSegmentation: public SupervoxelSegmentation {
     ros::Subscriber sub_depth_;
     ros::Subscriber sub_cinfo_;
     ros::Subscriber sub_joints_;
+
+    ros::ServiceServer service_;
    
     ros::Publisher pub_cloud_;
     ros::Publisher pub_indices_;
@@ -106,7 +114,8 @@ class SimpleObjectSegmentation: public SupervoxelSegmentation {
     template<class T>
     void getNormals(const PointCloud::Ptr, PointNormal::Ptr,
                     T = 0.05f, bool = false) const;
-    void segment(const PointCloud::Ptr);
+    void segment(std::vector<PointCloud::Ptr> &,
+                 std::vector<Eigen::Vector4f> &, const PointCloud::Ptr);
     float convexityCriteria(Eigen::Vector4f, Eigen::Vector4f,
                             Eigen::Vector4f, Eigen::Vector4f,
                             const float = -0.01f, bool = false);
@@ -129,9 +138,11 @@ class SimpleObjectSegmentation: public SupervoxelSegmentation {
                      const sensor_msgs::CameraInfo);
     void project2DTo3D(PointT *, const int, const int, const float,
                        const sensor_msgs::CameraInfo);
-   
+    cv::Mat projectPointCloudToImagePlane(const PointCloud::Ptr,
+                                          const sensor_msgs::CameraInfo::ConstPtr &,
+                                          cv::Mat &);
+    bool getObject(simple_object_segmentation::ObjectSegmentation::Request &,
+                   simple_object_segmentation::ObjectSegmentation::Response &);
 };
-
-
 
 #endif /* _SIMPLE_OBJECT_SEGMENTATION_HPP_ */

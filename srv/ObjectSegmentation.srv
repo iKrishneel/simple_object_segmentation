@@ -1,0 +1,6 @@
+sensor_msgs/CameraInfo camera_info
+sensor_msgs/JointState joint_state
+sensor_msgs/Image depth_image
+sensor_msgs/Image false_mask
+---
+sensor_msgs/Image object_mask

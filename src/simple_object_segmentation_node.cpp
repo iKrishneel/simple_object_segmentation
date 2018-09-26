@@ -9,27 +9,37 @@ SimpleObjectSegmentation::SimpleObjectSegmentation() :
     std::string type;
     this->pnh_.param<std::string>("user_input", this->user_in_type_, "none");
     this->pnh_.param<float>("cc_thresh", this->cc_thresh_, -0.01);
+    this->pnh_.param<float>("is_srv", this->is_srv_);
 
+    this->is_srv_ = true;
+    
     this->camera_info_ == NULL;
     this->unit_scaling_ = 1.0f;
     this->max_distance_ = 3.0f;
 
     this->head_tilt_angle_ = std::numeric_limits<float>::quiet_NaN();
-    this->vertical_normal_ = Eigen::Vector4f(1e-9, -1.000, 1e-9, 0);
+    this->vertical_normal_ = Eigen::Vector4f(1e-5, -1.000, 1e-5, 0);
 
     this->kdtree_ = pcl::KdTreeFLANN<PointT>::Ptr(new pcl::KdTreeFLANN<PointT>);
     this->onInit();
 }
 
 void SimpleObjectSegmentation::onInit() {
-    this->subscribe();
-    
-    this->pub_cloud_ = this->pnh_.advertise<sensor_msgs::PointCloud2>(
-       "/cloud", 1);
-    this->pub_indices_ = this->pnh_.advertise<
-       jsk_recognition_msgs::ClusterPointIndices>("/indices", 1);
-    this->pub_centroid_ = this->pnh_.advertise<
-       geometry_msgs::PointStamped>("/object_centroid", 1);
+
+    if (this->is_srv_) {
+       ROS_INFO("SETTING UP SERVICE");
+       this->service_ = this->pnh_.advertiseService(
+          "simple_object_segmentation",
+          &SimpleObjectSegmentation::getObject, this);
+    } else {
+       this->subscribe();
+       this->pub_cloud_ = this->pnh_.advertise<sensor_msgs::PointCloud2>(
+          "/cloud", 1);
+       this->pub_indices_ = this->pnh_.advertise<
+          jsk_recognition_msgs::ClusterPointIndices>("/indices", 1);
+       this->pub_centroid_ = this->pnh_.advertise<
+          geometry_msgs::PointStamped>("/object_centroid", 1);
+    }
 }
 
 void SimpleObjectSegmentation::subscribe() {
@@ -102,20 +112,27 @@ void SimpleObjectSegmentation::infoCB(
      }
 }
 
-void SimpleObjectSegmentation::callback(
-    const sensor_msgs::PointCloud2::ConstPtr &cloud_msg) {
-    PointCloud::Ptr cloud(new PointCloud);
-    pcl::fromROSMsg(*cloud_msg, *cloud);
-    if (cloud->empty()) {
-       ROS_ERROR("[::cloudCB]: EMPTY INPUTS");
-       return;
-    }
-    this->header_ = cloud_msg->header;
+bool SimpleObjectSegmentation::getObject(
+    simple_object_segmentation::ObjectSegmentation::Request &request,
+    simple_object_segmentation::ObjectSegmentation::Response &response) {
+    ROS_INFO("OBJECT SEGMENTATION SRV REQUEST RECEIVED");
 
-    assert((cloud->width != 1 || cloud->height != 1)  &&
-           "\033[31m UNORGANIZED INPUT CLOUD \033[0m");
-    this->segment(cloud);
+    sensor_msgs::JointState::Ptr joints(new sensor_msgs::JointState);
+    *joints = request.joint_state;
+    sensor_msgs::Image::Ptr depth(new sensor_msgs::Image);
+    *depth = request.depth_image;
+    // sensor_msgs::Image::Ptr mask(new sensor_msgs::Image);
+    // *mask = request.object_mask;
+    this->camera_info_ = sensor_msgs::CameraInfo::Ptr(
+       new sensor_msgs::CameraInfo);
+    *camera_info_ = request.camera_info;
+
+    this->jointCB(joints);
+    this->imageCB(depth);
+
+    response.object_mask = *(cv_ptr_->toImageMsg());
 }
+
 
 void SimpleObjectSegmentation::imageCB(
     const sensor_msgs::Image::ConstPtr &image_msg) {
@@ -139,6 +156,11 @@ void SimpleObjectSegmentation::imageCB(
     Eigen::Vector4f trans_norm = transform * this->vertical_normal_;
     
     cv::Mat im_depth = cv_ptr->image.clone();
+
+    //!
+    cv::medianBlur(im_depth, im_depth, 7);
+
+    
     pcl::PointIndices minmax_points;
     PointCloud::Ptr cloud(new PointCloud);
     this->convertTo3D(cloud, minmax_points, im_depth, *camera_info_);
@@ -148,28 +170,136 @@ void SimpleObjectSegmentation::imageCB(
     }
 
     //! only need max y
-    float y_thresh = 0.010f;
+    float y_thresh = 0.02f;
     PointT max_pt = cloud->points[minmax_points.indices[1]];
     PointT min_pt = cloud->points[minmax_points.indices[0]];
     
-    max_pt.y -= y_thresh;
+    // max_pt.y -= y_thresh;
 
     PointCloud::Ptr no_plane(new PointCloud);
+
     for (int i = 0; i < cloud->size(); i++) {
        Eigen::Vector3f xyz = cloud->points[i].getVector3fMap();
        float v = trans_norm.head<3>().dot(xyz-max_pt.getVector3fMap());
-       if (v > 0) {
+       
+       if (v > 0.0) {
           no_plane->push_back(cloud->points[i]);
        }
     }
     
-    this->header_ = image_msg->header;
+    std::vector<PointCloud::Ptr> all_clouds;
+    std::vector<Eigen::Vector4f> all_centroids;
+    this->segment(all_clouds, all_centroids, no_plane);
 
-    // assert((cloud->width != 1 || cloud->height != 1)  &&
-    //       "\033[31m UNORGANIZED INPUT CLOUD \033[0m");
-    // this->segment(cloud);
-    this->segment(no_plane);
+    if (all_clouds.size() != all_centroids.size()) {
+       ROS_WARN("INCORRECT SIZE");
+       return;
+    }
 
+    //! ONLY SELECT OBJECT OF THIS SIZE
+    float max_size = 0.30f;
+    float min_size = 0.05f;
+    
+    double min_dist = 1E9;
+    int min_idx = -1;
+    for (int i = 0; i < all_centroids.size(); i++) {
+       double dist = pcl::distances::l2(
+          all_centroids[i], Eigen::Vector4f(0.0f, 0.0f, 0.0f, 1.0f));
+
+       //! simply find the object size
+       float minx = 1E9, miny = 1E9, minz = 1E9;
+       float maxx = 0, maxy = 0, maxz = 0;
+       for (int j = 0; j < all_clouds[i]->size(); j++) {
+          PointT pt = all_clouds[i]->points[j];
+          minx = pt.x < minx ? pt.x : minx;
+          miny = pt.y < miny ? pt.y : miny;
+          minz = pt.z < minz ? pt.z : minz;
+
+          maxx = pt.x > maxx ? pt.x : maxx;
+          maxy = pt.y > maxy ? pt.y : maxy;
+          maxz = pt.z > maxz ? pt.z : maxz;
+       }
+
+       float w = std::abs(minx - maxx);
+       float h = std::abs(miny - maxy);
+       float l = std::abs(minz - maxz);
+       
+       if (w < max_size && h < max_size && l < max_size &&
+           w > min_size && h > min_size && l > min_size) {
+
+          // std::cout << "Index: " << i << " " << w << " " << h << " " << l << "\n";
+          
+          if (all_centroids[i](1) < max_pt.y && dist < min_dist) {
+             min_dist = dist;
+             min_idx = i;
+          }
+       }
+    }
+
+    std::cout << "Min: " << min_idx << "\n\n";
+
+    if (min_idx == -1) {
+       ROS_WARN("NOT FOUND");
+       return;
+    }
+    
+    this->kdtree_->setInputCloud(no_plane);
+
+    
+    std::vector<int> neigbor_indices;
+    PointCloud::Ptr object_points(new PointCloud);
+    for (int i = 0; i < all_clouds[min_idx]->size(); i++) {
+       PointT pt = all_clouds[min_idx]->points[i];
+       neigbor_indices.clear();
+       this->getPointNeigbour<int>(neigbor_indices, no_plane, pt,
+                                   this->neigbor_size_);
+
+       for (int j = 0; j < neigbor_indices.size(); j++) {
+          int index = neigbor_indices[j];
+          object_points->push_back(no_plane->points[index]);
+       }
+    }
+
+
+    cv::Mat object_mask;
+    this->projectPointCloudToImagePlane(object_points,
+                                        this->camera_info_, object_mask);
+
+    this->cv_ptr_ = cv_bridge::CvImagePtr(new cv_bridge::CvImage);
+    this->cv_ptr_->header = image_msg->header;
+    this->cv_ptr_->encoding = sensor_msgs::image_encodings::MONO8;
+    this->cv_ptr_->image = object_mask.clone();
+
+    cv::imshow("Image", object_mask);
+    cv::waitKey(3);
+    
+    if (!this->is_srv_) {
+       sensor_msgs::PointCloud2 ros_cloud;
+       // pcl::toROSMsg(*all_clouds[min_idx], ros_cloud);
+       // pcl::toROSMsg(*object_points, ros_cloud);
+       pcl::toROSMsg(*cloud, ros_cloud);
+       ros_cloud.header = image_msg->header;
+       this->pub_cloud_.publish(ros_cloud);
+    }
+    
+}
+
+void SimpleObjectSegmentation::callback(
+    const sensor_msgs::PointCloud2::ConstPtr &cloud_msg) {
+    PointCloud::Ptr cloud(new PointCloud);
+    pcl::fromROSMsg(*cloud_msg, *cloud);
+    if (cloud->empty()) {
+       ROS_ERROR("[::cloudCB]: EMPTY INPUTS");
+       return;
+    }
+    this->header_ = cloud_msg->header;
+
+    assert((cloud->width != 1 || cloud->height != 1)  &&
+           "\033[31m UNORGANIZED INPUT CLOUD \033[0m");
+    
+    std::vector<PointCloud::Ptr> all_clouds;
+    std::vector<Eigen::Vector4f> all_centroids;
+    this->segment(all_clouds, all_centroids, cloud);
 }
 
 void SimpleObjectSegmentation::callbackRect(
@@ -448,6 +578,8 @@ void SimpleObjectSegmentation::getNormals(
 }
 
 void SimpleObjectSegmentation::segment(
+    std::vector<PointCloud::Ptr> &all_clouds,
+    std::vector<Eigen::Vector4f> &all_centroids,
     const PointCloud::Ptr in_cloud) {
     SupervoxelMap supervoxel_clusters;
     AdjacentList adjacency_list;
@@ -500,9 +632,20 @@ void SimpleObjectSegmentation::segment(
        }
     }
 
+    for (std::map<uint32_t, pcl::Supervoxel<PointT>::Ptr >::const_iterator
+           it = sv_clustered.begin(); it != sv_clustered.end();
+         ++it) {
+       pcl::Supervoxel<PointT>::Ptr super_voxel = it->second;
+       Eigen::Vector4f sv_centroid;
+       pcl::compute3DCentroid<PointT, float>(*super_voxel->voxels_,
+                                             sv_centroid);
+       all_clouds.push_back(super_voxel->voxels_);
+       all_centroids.push_back(sv_centroid);
+    }
+    
     ROS_INFO("DONE PROCESSING");
-
-    bool is_visualize = true;
+    
+    bool is_visualize = false;
     if (is_visualize) {
        sensor_msgs::PointCloud2 ros_voxels;
        jsk_recognition_msgs::ClusterPointIndices ros_indices;
@@ -728,10 +871,70 @@ void SimpleObjectSegmentation::project2DTo3D(
     point->z = dist * this->unit_scaling_;
 }
 
+cv::Mat SimpleObjectSegmentation::projectPointCloudToImagePlane(
+    const PointCloud::Ptr cloud,
+    const sensor_msgs::CameraInfo::ConstPtr &camera_info,
+    cv::Mat &mask) {
+    if (cloud->empty()) {
+       ROS_ERROR("INPUT CLOUD EMPTY");
+       return cv::Mat();
+    }
+    cv::Mat objectPoints = cv::Mat(static_cast<int>(cloud->size()), 3, CV_32F);
+    for (int i = 0; i < cloud->size(); i++) {
+       objectPoints.at<float>(i, 0) = cloud->points[i].x;
+       objectPoints.at<float>(i, 1) = cloud->points[i].y;
+       objectPoints.at<float>(i, 2) = cloud->points[i].z;
+    }
+    float K[9];
+    float R[9];
+    for (int i = 0; i < 9; i++) {
+       K[i] = camera_info->K[i];
+       R[i] = camera_info->R[i];
+    }
+    cv::Mat cameraMatrix = cv::Mat(3, 3, CV_32F, K);
+    cv::Mat rotationMatrix = cv::Mat(3, 3, CV_32F, R);
+    float tvec[3];
+    tvec[0] = camera_info->P[3];
+    tvec[1] = camera_info->P[7];
+    tvec[2] = camera_info->P[11];
+    cv::Mat translationMatrix = cv::Mat(3, 1, CV_32F, tvec);
+
+    float D[5];
+    for (int i = 0; i < 5; i++) {
+       D[i] = camera_info->D[i];
+    }
+    cv::Mat distortionModel = cv::Mat(5, 1, CV_32F, D);
+    cv::Mat rvec;
+    cv::Rodrigues(rotationMatrix, rvec);
+    
+    std::vector<cv::Point2f> imagePoints;
+    cv::projectPoints(objectPoints, rvec, translationMatrix,
+                      cameraMatrix, distortionModel, imagePoints);
+    cv::Scalar color = cv::Scalar(0, 0, 0);
+    cv::Mat image = cv::Mat(
+       camera_info->height, camera_info->width, CV_8UC3, color);
+    mask = cv::Mat::zeros(
+       camera_info->height, camera_info->width, CV_8U);
+    
+    for (int i = 0; i < imagePoints.size(); i++) {
+       int x = imagePoints[i].x;
+       int y = imagePoints[i].y;
+       if (!std::isnan(x) && !std::isnan(y) &&
+           (x >= 0 && x <= image.cols) && (y >= 0 && y <= image.rows)) {
+          image.at<cv::Vec3b>(y, x)[2] = cloud->points[i].r;
+          image.at<cv::Vec3b>(y, x)[1] = cloud->points[i].g;
+          image.at<cv::Vec3b>(y, x)[0] = cloud->points[i].b;
+
+          mask.at<uchar>(y, x) = 255.0f;
+       }
+    }
+    return image;
+}
+
 
 int main(int argc, char *argv[]) {
     ros::init(argc, argv, "simple_object_segmentation");
-    SimpleObjectSegmentation sos;
+    SimpleObjectSegmentation so_seg;
     ros::spin();
     return 0;
 }

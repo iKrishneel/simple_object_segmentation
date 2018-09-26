@@ -6,8 +6,10 @@ project(simple_object_segmentation)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS cmake_modules std_msgs std_srvs geometry_msgs roscpp rospy 
   sensor_msgs message_filters message_runtime  dynamic_reconfigure cv_bridge tf tf_conversions 
-  # message_generation
+  message_generation
  )
+
+find_package(OpenCV REQUIRED)
 
 find_package(PCL REQUIRED)
 include_directories(${PCL_INCLUDE_DIRS})
@@ -61,11 +63,10 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}
 # )
 
 ## Generate services in the 'srv' folder
-# add_service_files(
-#   FILES
-#   Service1.srv
-#   Service2.srv
-# )
+add_service_files(
+  FILES
+  ObjectSegmentation.srv
+)
 
 ## Generate actions in the 'action' folder
 # add_action_files(
@@ -75,10 +76,11 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}
 # )
 
 ## Generate added messages and services with any dependencies listed here
-# generate_messages(
-#   DEPENDENCIES
-#   geometry_msgs#   sensor_msgs
-# )
+generate_messages(
+  DEPENDENCIES
+  geometry_msgs
+  sensor_msgs
+)
 
 ################################################
 ## Declare ROS dynamic reconfigure parameters ##
@@ -109,10 +111,10 @@ generate_dynamic_reconfigure_options(
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
-#  INCLUDE_DIRS include
-#  LIBRARIES simple_object_segmentation
-#  CATKIN_DEPENDS geometry_msgs roscpp rospy sensor_msgs
-#  DEPENDS system_lib
+ INCLUDE_DIRS include
+ LIBRARIES simple_object_segmentation
+ CATKIN_DEPENDS geometry_msgs roscpp rospy sensor_msgs
+ DEPENDS system_lib
 )
 
 ###########
@@ -147,8 +149,7 @@ add_executable(simple_object_segmentation_node
 
 ## Specify libraries to link a library or executable target against
 target_link_libraries(simple_object_segmentation_node
-  ${catkin_LIBRARIES} ${PCL_LIBRARIES}
-  )
+  ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS})
 
 #############
 ## Install ##
