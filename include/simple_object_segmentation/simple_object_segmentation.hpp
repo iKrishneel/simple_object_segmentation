@@ -21,6 +21,11 @@
 #include <pcl/filters/extract_indices.h>
 #include <pcl/features/normal_3d_omp.h>
 
+#include <sensor_msgs/CameraInfo.h>
+#include <sensor_msgs/Image.h>
+#include <sensor_msgs/JointState.h>
+#include <cv_bridge/cv_bridge.h>
+
 #include <opencv2/opencv.hpp>
 #include <simple_object_segmentation/supervoxel_segmentation.hpp>
 
@@ -63,6 +68,12 @@ class SimpleObjectSegmentation: public SupervoxelSegmentation {
     PointT seed_point_;
     NormalT seed_normal_;
    
+    sensor_msgs::CameraInfo::Ptr camera_info_;
+    float unit_scaling_;
+    float max_distance_;
+
+    Eigen::Vector4f vertical_normal_;
+    float head_tilt_angle_;
    
  protected:
     virtual void onInit();
@@ -72,6 +83,10 @@ class SimpleObjectSegmentation: public SupervoxelSegmentation {
     boost::mutex lock_;
     ros::NodeHandle pnh_;
     ros::Subscriber sub_cloud_;
+    ros::Subscriber sub_depth_;
+    ros::Subscriber sub_cinfo_;
+    ros::Subscriber sub_joints_;
+   
     ros::Publisher pub_cloud_;
     ros::Publisher pub_indices_;
     ros::Publisher pub_centroid_;
@@ -79,10 +94,14 @@ class SimpleObjectSegmentation: public SupervoxelSegmentation {
  public:
     SimpleObjectSegmentation();
     void callback(const sensor_msgs::PointCloud2::ConstPtr &);
+    void imageCB(const sensor_msgs::Image::ConstPtr &);
     void callbackRect(const sensor_msgs::PointCloud2::ConstPtr &,
                          const geometry_msgs::PolygonStamped::ConstPtr &);
     void callbackPoint(const sensor_msgs::PointCloud2::ConstPtr &,
                        const geometry_msgs::PointStamped::ConstPtr &);
+    void infoCB(const sensor_msgs::CameraInfo::ConstPtr &);
+    void jointCB(const sensor_msgs::JointState::ConstPtr &);
+      
     void getNormals(PointNormal::Ptr, const PointCloud::Ptr);
     template<class T>
     void getNormals(const PointCloud::Ptr, PointNormal::Ptr,
@@ -105,6 +124,12 @@ class SimpleObjectSegmentation: public SupervoxelSegmentation {
     template<class T>
     void getPointNeigbour(std::vector<int> &, const PointCloud::Ptr,
                           const PointT, const T = 16, bool = true);
+
+    void convertTo3D(PointCloud::Ptr, pcl::PointIndices &, const cv::Mat,
+                     const sensor_msgs::CameraInfo);
+    void project2DTo3D(PointT *, const int, const int, const float,
+                       const sensor_msgs::CameraInfo);
+   
 };
 
 

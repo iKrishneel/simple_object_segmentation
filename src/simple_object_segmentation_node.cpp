@@ -9,7 +9,14 @@ SimpleObjectSegmentation::SimpleObjectSegmentation() :
     std::string type;
     this->pnh_.param<std::string>("user_input", this->user_in_type_, "none");
     this->pnh_.param<float>("cc_thresh", this->cc_thresh_, -0.01);
-    
+
+    this->camera_info_ == NULL;
+    this->unit_scaling_ = 1.0f;
+    this->max_distance_ = 3.0f;
+
+    this->head_tilt_angle_ = std::numeric_limits<float>::quiet_NaN();
+    this->vertical_normal_ = Eigen::Vector4f(1e-9, -1.000, 1e-9, 0);
+
     this->kdtree_ = pcl::KdTreeFLANN<PointT>::Ptr(new pcl::KdTreeFLANN<PointT>);
     this->onInit();
 }
@@ -46,8 +53,16 @@ void SimpleObjectSegmentation::subscribe() {
           boost::bind(&SimpleObjectSegmentation::callbackPoint, this, _1, _2));
     } else {
        ROS_INFO("\033[34mRUN TYPE AUTO\033[0m");
+       /*
        this->sub_cloud_ = this->pnh_.subscribe(
           "points", 1, &SimpleObjectSegmentation::callback, this);
+       */
+       this->sub_depth_ = this->pnh_.subscribe(
+          "depth", 1, &SimpleObjectSegmentation::imageCB, this);
+       this->sub_cinfo_ = this->pnh_.subscribe(
+          "info", 10, &SimpleObjectSegmentation::infoCB, this);
+       this->sub_joints_ = this->pnh_.subscribe(
+          "joint_states", 10, &SimpleObjectSegmentation::jointCB, this);
     }
 }
 
@@ -58,6 +73,33 @@ void SimpleObjectSegmentation::unsubscribe() {
     } else {
        this->sub_cloud_.shutdown();
     }
+}
+
+void SimpleObjectSegmentation::jointCB(
+     const sensor_msgs::JointState::ConstPtr &joint_msg) {
+     bool is_set = false;
+
+     std::string tilt_joint_name = "head_tilt_joint";
+     for (int i = 0; i < joint_msg->name.size(); i++) {
+        if (!tilt_joint_name.compare(joint_msg->name[i])) {
+           this->head_tilt_angle_ = -1.0f *
+              static_cast<float>(joint_msg->position[i]);
+           break;
+        }
+     }
+}
+
+void SimpleObjectSegmentation::infoCB(
+     const sensor_msgs::CameraInfo::ConstPtr &info_msg) {
+     ROS_INFO("CAMERA INFO");
+     if (this->camera_info_ == NULL) {
+        this->camera_info_ = sensor_msgs::CameraInfo::Ptr(
+           new sensor_msgs::CameraInfo);
+        *camera_info_ = *info_msg;
+     } else {
+        ROS_INFO("SHUTTING DOWN INFO SUBSCRIBER");
+        this->sub_cinfo_.shutdown();
+     }
 }
 
 void SimpleObjectSegmentation::callback(
@@ -73,6 +115,61 @@ void SimpleObjectSegmentation::callback(
     assert((cloud->width != 1 || cloud->height != 1)  &&
            "\033[31m UNORGANIZED INPUT CLOUD \033[0m");
     this->segment(cloud);
+}
+
+void SimpleObjectSegmentation::imageCB(
+    const sensor_msgs::Image::ConstPtr &image_msg) {
+
+    if (std::isnan(this->head_tilt_angle_)) {
+       ROS_WARN("HEAD TILT ANGLE NOT SET");
+       return;
+    }
+   
+    cv_bridge::CvImagePtr cv_ptr;
+    try {
+       cv_ptr = cv_bridge::toCvCopy(image_msg, "32FC1");
+    } catch (cv_bridge::Exception& e) {
+       ROS_ERROR("cv_bridge exception: %s", e.what());
+       return;
+    }
+
+    Eigen::Affine3f transform = Eigen::Affine3f::Identity();
+    transform.rotate(Eigen::AngleAxisf(this->head_tilt_angle_ * 0.98f,
+                                       Eigen::Vector3f::UnitX()));
+    Eigen::Vector4f trans_norm = transform * this->vertical_normal_;
+    
+    cv::Mat im_depth = cv_ptr->image.clone();
+    pcl::PointIndices minmax_points;
+    PointCloud::Ptr cloud(new PointCloud);
+    this->convertTo3D(cloud, minmax_points, im_depth, *camera_info_);
+    if (cloud->empty()) {
+       ROS_ERROR("[::cloudCB]: EMPTY INPUTS");
+       return;
+    }
+
+    //! only need max y
+    float y_thresh = 0.010f;
+    PointT max_pt = cloud->points[minmax_points.indices[1]];
+    PointT min_pt = cloud->points[minmax_points.indices[0]];
+    
+    max_pt.y -= y_thresh;
+
+    PointCloud::Ptr no_plane(new PointCloud);
+    for (int i = 0; i < cloud->size(); i++) {
+       Eigen::Vector3f xyz = cloud->points[i].getVector3fMap();
+       float v = trans_norm.head<3>().dot(xyz-max_pt.getVector3fMap());
+       if (v > 0) {
+          no_plane->push_back(cloud->points[i]);
+       }
+    }
+    
+    this->header_ = image_msg->header;
+
+    // assert((cloud->width != 1 || cloud->height != 1)  &&
+    //       "\033[31m UNORGANIZED INPUT CLOUD \033[0m");
+    // this->segment(cloud);
+    this->segment(no_plane);
+
 }
 
 void SimpleObjectSegmentation::callbackRect(
@@ -138,8 +235,8 @@ void SimpleObjectSegmentation::callbackPoint(
        return;
     }
 
-    std::vector<int> nan_indices;
-    pcl::removeNaNFromPointCloud<PointT>(*cloud, *cloud, nan_indices);
+    // std::vector<int> nan_indices;
+    // pcl::removeNaNFromPointCloud<PointT>(*cloud, *cloud, nan_indices);
 
     double dist = DBL_MAX;
     int idx = -1;
@@ -153,7 +250,8 @@ void SimpleObjectSegmentation::callbackPoint(
     }
     
     PointNormal::Ptr normals(new PointNormal);
-    this->getNormals<float>(cloud, normals, 0.03f, false);
+    // this->getNormals<float>(cloud, normals, 0.03f, false);
+    this->getNormals(normals, cloud);
     
     seed_index = idx;
     this->seed_point_ = cloud->points[seed_index];
@@ -577,6 +675,59 @@ int SimpleObjectSegmentation::seedVoxelConvexityCriteria(
 
     }
 }
+
+void SimpleObjectSegmentation::convertTo3D(
+    PointCloud::Ptr cloud, pcl::PointIndices &minmax_points,
+    const cv::Mat im_depth, const sensor_msgs::CameraInfo info_msg) {
+    int index = 0;
+    PointT *point = new PointT;
+    cloud->resize(info_msg.width * info_msg.height);
+    cloud->width = info_msg.width;
+    cloud->height = info_msg.height;
+
+    //! currently only min-max in y-axis
+    PointT min_pt(1E9, 1E9, 1E9);
+    PointT max_pt(0.0f, 0.0f, 0.0f);
+    minmax_points.indices.resize(2);
+    
+    for (int j = 0; j < im_depth.rows; j++) {
+       for (int i = 0; i < im_depth.cols; i++) {
+          index = i + (j * im_depth.cols);
+          float d = im_depth.at<float>(j, i);
+          if (!std::isnan(d) && d < this->max_distance_) {
+             this->project2DTo3D(point, i, j, im_depth.at<float>(j, i),
+                                 info_msg);
+
+             if (point->y > max_pt.y) {
+                max_pt = *point;
+                minmax_points.indices[1] = index;
+             }
+             if (point->y < min_pt.y) {
+                min_pt = *point;
+                minmax_points.indices[0] = index;
+             }
+             
+          } else {
+             point->x = std::numeric_limits<double>::quiet_NaN();
+             point->y = std::numeric_limits<double>::quiet_NaN();
+             point->z = std::numeric_limits<double>::quiet_NaN();
+          }
+          cloud->points[index] = *point;
+       }
+    }
+}
+
+void SimpleObjectSegmentation::project2DTo3D(
+    PointT *point, const int x, const int y, const float dist,
+    const sensor_msgs::CameraInfo info_msg) {
+    float const_x = this->unit_scaling_ / info_msg.K[0];
+    float const_y = this->unit_scaling_ / info_msg.K[4];
+
+    point->x = (static_cast<float>(x) - info_msg.P[2]) * dist * const_x;
+    point->y = (static_cast<float>(y) - info_msg.P[6]) * dist * const_y;
+    point->z = dist * this->unit_scaling_;
+}
+
 
 int main(int argc, char *argv[]) {
     ros::init(argc, argv, "simple_object_segmentation");

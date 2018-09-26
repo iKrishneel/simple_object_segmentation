@@ -1,8 +1,9 @@
 <launch>
   <arg name="points" default="/hsrb/head_rgbd_sensor/depth_registered/rectified_points" />
+  <arg name="depth" default="/hsrb/head_rgbd_sensor/depth_registered/image" />
+  <arg name="info" default="/hsrb/head_rgbd_sensor/depth_registered/camera_info"/>
   <arg name="image" default="/hsrb/head_rgbd_sensor/rgb/image_rect_color"/>
-  <!-- <arg name="rect" default="/hsrb/head_rgbd_sensor/rgb/image_rect_color/screenrectangle" /> -->
-  <!-- <arg name="screen_pt" default="/camera/rgb/image_rect_color/screenpoint" /> -->
+  <arg name="joint_states" default="/hsrb/joint_states"/>
   
   <arg name="visualize" default="true" />
   <arg name="user_input" default="none" />
@@ -11,6 +12,11 @@
   <node pkg="simple_object_segmentation" type="simple_object_segmentation_node"
 	name="simple_object_segmentation" output="screen" clear_params="false">
     <remap from="points" to="$(arg points)" />
+    <remap from="depth" to="$(arg depth)" />
+    <remap from="info" to="$(arg info)" />
+    <remap from="joint_states" to="$(arg joint_states)" />
+    
+    
     <remap from="rect" to="$(arg image)/screenrectangle" />
     <remap from="screen_pt" to="$(arg image)/screenpoint" />
 
@@ -19,8 +25,9 @@
 
     <param name="cc_thresh" value="$(arg cc_thresh)" />
     <remap from="cc_thresh" to="/simple_object_segmentation/cc_thresh" />
+    
   </node>
-
+  
   <group if="$(arg visualize)" >
     <node pkg="jsk_pcl_ros" type="cluster_point_indices_decomposer" 
 	  name="segmentation_decomposer">
